@@ -178,7 +178,18 @@ class EIIS
       cmd = gets.chomp
       case cmd
       when "commands"
-         puts($client.operations)
+        cmds = %q[
+        objects - Get all available objects from EIIS (should be the first command)
+        print_codes - Print indexed list of objects (you need to know object index)
+        obj_meta N - Get object metadata from object, with N as object index
+        create N - Create package from object, with N as object index
+        print_packages - Print indexed list of packages (you need to know package index)
+        package_meta N - Get package metadata from package, with N as package index
+        package_data N P - Get package data from package, with N as package index and P as part index (starts with 1 I guess)
+        ]
+        puts "#{cmds}"
+      when "operations"
+        puts(@client.operations)
       when "objects"
         objects = get_objects(true)
         if objects != nil
