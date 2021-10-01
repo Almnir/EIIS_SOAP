@@ -9,6 +9,7 @@ class EIIS
 
   def initialize
     @eiis_wsdl = "http://eiis-production.srvdev.ru/integrationservice/baseservice.asmx?WSDL"
+    @primary_key_code = 'ID'
     @session_id = ""
     @client = Savon.client(
       :wsdl => @eiis_wsdl,
@@ -37,6 +38,7 @@ class EIIS
     end
   end
 
+  ### получение списка объектов
   def get_objects(include_fields)
     begin
       msg = { session_id: @session_id, fields_include: include_fields }
@@ -57,10 +59,32 @@ class EIIS
     end
   end
 
+  ### получение метаданных объекта
+  ### не работает по непонятной причине, возвращает код 033
+  def get_document_meta(object_code)
+    if @object_codes.empty?
+      puts "No codes available, please get objects by 'objects' command!"
+      return nil
+    end
+    puts "Code value #{@object_codes[object_code.to_i]}"
+    begin
+      msg = { session_id: @session_id, object_code: @object_codes[object_code.to_i], primary_key: @primary_key_code }
+      pp msg
+      response = @client.call(:get_document_meta, message: msg)
+      pp response
+      return response.body.values[0][:get_document_data_response]
+    rescue Savon::HTTPError => error
+      Logger.log error.http.code
+      return nil
+    end
+  end
+
   def store_package_id(package_id)
     @package_ids << package_id
   end
 
+  ### создание пакета по индексу объекта
+  ### остальные параметры интересны, но непонятно что делают
   def create_package(object_code, history_create=false, document_include=false, filter="")
     if @object_codes.empty?
       puts "No codes available, please get objects by 'objects' command!"
@@ -81,6 +105,7 @@ class EIIS
     end
   end
 
+  ### получить метаданные пакета по индексу пакета
   def get_package_meta(package_index)
     if @package_ids.empty?
       puts "No ids available, please create packages by 'create [Number]' command!"
@@ -91,6 +116,45 @@ class EIIS
       msg = { session_id: @session_id, package_id: @package_ids[package_index.to_i] }
       response = @client.call(:get_package_meta, message: msg)
       return response.body.values[0][:get_package_meta_result]
+    rescue Savon::HTTPError => error
+      Logger.log error.http.code
+      return nil
+    end
+  end
+
+  ### Данные по пакету кусочками
+  ### индекс, кусочек(наверное начинается с 1 кусочка)
+  def get_package(package_index, part)
+    if @package_ids.empty?
+      puts "No ids available, please create packages by 'create [Number]' command!"
+      return nil
+    end
+    puts "Package data for #{@package_ids[package_index.to_i]}"    
+    begin
+      msg = { session_id: @session_id, package_id: @package_ids[package_index.to_i], part: part }
+      # pp msg
+      response = @client.call(:get_package, message: msg)
+      # pp response
+      return response.body.values[0][:get_package_result]
+    rescue Savon::HTTPError => error
+      Logger.log error.http.code
+      return nil
+    end
+  end
+
+  ### Подтверждение успешного получения кусочка данных пакета (не знаю, зачем, но ладно)
+  def set_ok(package_index)
+    if @package_ids.empty?
+      puts "No ids available, please create packages by 'create [Number]' command!"
+      return nil
+    end
+    puts "Set Ok package data for #{@package_ids[package_index.to_i]}"    
+    begin
+      msg = { session_id: @session_id, package_id: @package_ids[package_index.to_i] }
+      # pp msg
+      response = @client.call(:set_ok, message: msg)
+      # pp response
+      return response.body
     rescue Savon::HTTPError => error
       Logger.log error.http.code
       return nil
@@ -116,7 +180,7 @@ class EIIS
       when "commands"
          puts($client.operations)
       when "objects"
-        objects = get_objects(false)
+        objects = get_objects(true)
         if objects != nil
           pp objects
           parse_object_codes(objects)
@@ -135,8 +199,19 @@ class EIIS
           pp "Package created with Package_id = #{response}"
           store_package_id(response)
         end
-      when /^meta (\d+)$/
+      when /^package_meta (\d+)$/
         response = get_package_meta($1)
+        if response != nil
+          pp response
+        end
+      when /^package_data (\d+) (\d+)$/
+        response = get_package($1, $2)
+        if response != nil
+          pp response
+          set_ok($1)
+        end
+      when /^obj_meta (\d+)$/
+        response = get_document_meta($1)
         if response != nil
           pp response
         end
