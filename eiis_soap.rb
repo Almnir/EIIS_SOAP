@@ -179,6 +179,9 @@ class EIIS
       case cmd
       when "commands"
         cmds = %q[
+        exit - Quit EIIS server
+        session - Print current session
+        operations - Prints all EIIS WDSL entry points (not all of them are implemented yet)
         objects - Get all available objects from EIIS (should be the first command)
         print_codes - Print indexed list of objects (you need to know object index)
         obj_meta N - Get object metadata from object, with N as object index
