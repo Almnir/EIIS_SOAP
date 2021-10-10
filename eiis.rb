@@ -1,6 +1,7 @@
 require 'savon'
 require 'json'
 require 'nokogiri'
+require 'active_support/core_ext/hash'
 
 class EIIS
   attr_accessor :session_id
@@ -132,9 +133,7 @@ class EIIS
     puts "Package data for #{@package_ids[package_index.to_i]}"    
     begin
       msg = { session_id: @session_id, package_id: @package_ids[package_index.to_i], part: part }
-      # pp msg
       response = @client.call(:get_package, message: msg)
-      # pp response
       return response.body.values[0][:get_package_result]
     rescue Savon::HTTPError => error
       Logger.log error.http.code
@@ -142,7 +141,7 @@ class EIIS
     end
   end
 
-  ### Подтверждение успешного получения кусочка данных пакета (не знаю, зачем, но ладно)
+  ### Подтверждение успешного получения кусочка данных пакета (не знаю зачем, но ладно)
   def set_ok(package_index)
     if @package_ids.empty?
       puts "No ids available, please create packages by 'create [Number]' command!"
@@ -197,6 +196,8 @@ class EIIS
         objects = get_objects(true)
         if objects != nil
           pp objects
+          content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
+          File.write('e:/rubies/objects.json', content)
           parse_object_codes(objects)
         end
       when "print_codes"
@@ -239,5 +240,5 @@ class EIIS
   end
 end
 
-eiis = EIIS.new
-eiis.serve
+# eiis = EIIS.new
+# eiis.serve
