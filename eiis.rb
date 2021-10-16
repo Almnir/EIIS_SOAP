@@ -2,6 +2,7 @@ require 'savon'
 require 'json'
 require 'nokogiri'
 require 'active_support/core_ext/hash'
+require 'async'
 
 class EIIS
   attr_accessor :session_id
@@ -160,12 +161,35 @@ class EIIS
     end
   end
 
+  def get_packages_all(package_index)
+    if @package_ids.empty?
+      puts "No ids available, please create packages by 'create [Number]' command!"
+      return nil
+    end
+    puts "All package data for #{@package_ids[package_index.to_i]}"
+    # получаем из метаданных количество кусков
+    meta = get_package_meta(package_index)
+    doc = Nokogiri::XML(meta)
+    capacity = doc.at('package')['capacity'].to_i
+    # асинхронно это всё запрашиваем чтобы каждый раз не ждать следующего
+    all_data = ""
+    Async do
+      (1..capacity).each do |part|
+        Async do
+          all_data += get_package(package_index, part)
+        end
+      end
+    end
+    return all_data
+  end
+
   def serve
-    print "login:"
-    login = gets.chomp
-    print "password:"
-    password = gets.chomp
-    auth = authorize(login, password)
+    # print "login:"
+    # login = gets.chomp
+    # print "password:"
+    # password = gets.chomp
+    # auth = authorize(login, password)
+    auth = authorize("fisege", "123")
     if auth != nil
       puts("Session ID set to #{@session_id}")
     else
@@ -193,11 +217,11 @@ class EIIS
       when "operations"
         puts(@client.operations)
       when "objects"
-        objects = get_objects(true)
+        objects = get_objects(false)
         if objects != nil
           pp objects
-          content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
-          File.write('e:/rubies/objects.json', content)
+          # content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
+          # File.write('e:/rubies/objects.json', content)
           parse_object_codes(objects)
         end
       when "print_codes"
@@ -230,6 +254,11 @@ class EIIS
         if response != nil
           pp response
         end
+      when /^package_all (\d+)$/
+        response = get_packages_all($1)
+        if response != nil
+          pp response
+        end
       when "session"
         puts @session_id
       when "exit"
@@ -240,5 +269,5 @@ class EIIS
   end
 end
 
-# eiis = EIIS.new
-# eiis.serve
+eiis = EIIS.new
+eiis.serve
