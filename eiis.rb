@@ -3,6 +3,7 @@ require 'json'
 require 'nokogiri'
 require 'active_support/core_ext/hash'
 require 'async'
+require 'benchmark'
 
 class EIIS
   attr_accessor :session_id
@@ -173,11 +174,27 @@ class EIIS
     capacity = doc.at('package')['capacity'].to_i
     # асинхронно это всё запрашиваем чтобы каждый раз не ждать следующего
     all_data = ""
-    Async do
-      (1..capacity).each do |part|
-        Async do
-          all_data += get_package(package_index, part)
+    # no threads
+    # puts "No threads, single!!!!!!!!!!!!!!!!!!!!!!!"
+    # Benchmark.bm do |x|
+    #   x.report do
+    #     (1..capacity).each do |part|
+    #       all_data += get_package(package_index, part)
+    #     end
+    #   end
+    # end
+    all_data = ""
+    # threads
+    puts "Threads!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    Benchmark.bm do |x|
+      x.report do
+        threads = []
+        (1..capacity).each do |part|
+            threads[part-1] = Thread.new do
+              all_data += get_package(package_index, part)
+            end
         end
+        threads.each { |t| t.join }
       end
     end
     return all_data
@@ -257,7 +274,7 @@ class EIIS
       when /^package_all (\d+)$/
         response = get_packages_all($1)
         if response != nil
-          pp response
+          # pp response
         end
       when "session"
         puts @session_id
