@@ -181,6 +181,10 @@ class EIIS
       end
     end
     threads.each { |t| t.join }
+    return all_data
+  end
+
+  def parse_xml_data_and_write_to_file(all_data)
     out_file = File.new("inserts.sql", "w")
     # парсим ответ
     case @package_ids.values[package_index.to_i]
@@ -201,9 +205,8 @@ class EIIS
     end
     out_file << sqltext
     out_file.close
-    return "ok"
   end
-  
+
   ### Подтверждение успешного получения кусочка данных пакета (не знаю зачем, но ладно)
   def set_ok(package_index)
     if @package_ids.empty?
@@ -292,8 +295,7 @@ class EIIS
         puts "All package data for #{@package_ids.values[$1.to_i]}"
         response = get_package_all($1)
         if response != nil
-          # pp response
-          # File.write('all_package_data.xml', response)
+          parse_xml_data_and_write_to_file(response)
           puts "File saved!"
         end
       when /^obj_meta (\d+)$/
