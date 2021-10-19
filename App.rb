@@ -13,7 +13,7 @@ class App < Sinatra::Base
     def initialize
         @eiis = EIIS.new
         # login, password
-        auth = @eiis.authorize("", "")
+        auth = @eiis.authorize("fisege", "123")
         if auth != nil
             puts("Session ID set to #{@eiis.session_id}")
         else
@@ -31,9 +31,9 @@ class App < Sinatra::Base
         before do
             content_type 'application/json'
         end
-        after do
-            puts response.status
-        end
+        # after do
+        #     puts response.status
+        # end
 
         helpers do
         end
