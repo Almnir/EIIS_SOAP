@@ -17,8 +17,8 @@ class EIIS
       :unwrap => true,
       :pretty_print_xml => true,
       :env_namespace => :s,
-      :open_timeout => 10,
-      :read_timeout => 10,
+      :open_timeout => 200,
+      :read_timeout => 200,
       :convert_request_keys_to => :lower_camelcase,
       :log => false
     )
@@ -318,5 +318,5 @@ class EIIS
   end
 end
 
-# eiis = EIIS.new
-# eiis.serve
+eiis = EIIS.new
+eiis.serve
