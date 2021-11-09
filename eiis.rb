@@ -3,6 +3,8 @@ require 'json'
 require 'nokogiri'
 require 'active_support/core_ext/hash'
 require_relative 'ParseEIIS.rb'
+require 'benchmark'
+require 'tty-reader'
 
 class EIIS
   attr_accessor :session_id
@@ -10,6 +12,7 @@ class EIIS
 
   def initialize
     @eiis_wsdl = "http://eiis-production.srvdev.ru/integrationservice/baseservice.asmx?WSDL"
+    # @eiis_wsdl = "https://eiis.obrnadzor.gov.ru/IntegrationService/BaseService.asmx?WSDL"
     @primary_key_code = 'ID'
     @session_id = ""
     @client = Savon.client(
@@ -25,6 +28,7 @@ class EIIS
     @object_codes = []
     @package_ids = {}
     @parseEIIS = ParseEIIS.new
+    @tty_reader = TTY::Reader.new(track_history: true, history_cycle: true)
     puts("Creating SOAP client for: " + @eiis_wsdl)
   end
 
@@ -169,23 +173,34 @@ class EIIS
     response = get_package_meta($1)
     if response != nil
       doc = Nokogiri::XML(response)
+      pp doc
       capacity = doc.at('package')['capacity']
+      pp capacity
     end
     all_data = ""
-    # многопоточно, так как постоянно ждать по кусочку получается раза в три дольше
+    # no threads
+    # puts "No threads, single!!!!!!!!!!!!!!!!!!!!!!!"
+    # Benchmark.bm do |x|
+    #   x.report do
+    #     (1..capacity.to_i).each do |part|
+    #       all_data += get_package_data(package_index, part)
+    #     end
+    #   end
+    # end
+    File.delete("inserts.sql") if File.exists?("inserts.sql") 
     threads = []
-    (1..capacity.to_i).each do |n|
-      threads[n-1] = Thread.new do
-        all_data += get_package_data(package_index, n)
-        set_ok(package_index)
+    Benchmark.bm do |x|
+      x.report do
+        (1..capacity.to_i).each do |n|
+              all_data = get_package_data(package_index, n)
+              parse_xml_data_and_write_to_file(all_data, package_index)
+        end
       end
     end
-    threads.each { |t| t.join }
-    return all_data
+    set_ok(package_index)
   end
 
-  def parse_xml_data_and_write_to_file(all_data)
-    out_file = File.new("inserts.sql", "w")
+  def parse_xml_data_and_write_to_file(all_data, package_index)
     # парсим ответ
     case @package_ids.values[package_index.to_i]
       when "EIIS.REGIONS"
@@ -202,9 +217,22 @@ class EIIS
         sqltext = @parseEIIS.ParseSchools(all_data)
       when "EIIS.SCHOOL_STATUSES"
         sqltext = @parseEIIS.ParseSchoolStatuses(all_data)
+      when "EIIS.LICENSED_PROGRAMS"
+        sqltext = @parseEIIS.ParseLicensedPrograms(all_data)
+      when "EIIS.FOUNDERS"
+        sqltext = @parseEIIS.InsertFounders(all_data)
+      when "EIIS.FOUNDER_TYPES"
+        sqltext = @parseEIIS.InsertFounderTypes(all_data)
+      else
+        puts "No such parsing fascilities!"
+        return 1
     end
-    out_file << sqltext
-    out_file.close
+    unless sqltext == nil && sqltext.empty?
+      File.open("inserts.sql", "a") do |file|
+        file << sqltext
+      end
+    end
+    return 0
   end
 
   ### Подтверждение успешного получения кусочка данных пакета (не знаю зачем, но ладно)
@@ -231,14 +259,32 @@ class EIIS
     auth = authorize(login, password)
     if auth != nil
       puts("Session ID set to #{@session_id}")
-    else
+      objects = get_objects(true)
+      if objects != nil
+        pp objects
+        # content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
+        parse_object_codes(objects)
+        @object_codes.each_with_index do |code, index|
+          puts "#{index}: #{code}"
+        end
+      end
+  else
       puts("Authorization failed.")
       return
     end
-    loop do 
+    @tty_reader.on(:keyctrl_x, :keyescape) do
+      puts "Exiting..."
+      exit
+    end
+    @tty_reader.on(:keyctrl_x, :keyescape) do
+      puts "Exiting..."
+      exit
+    end
+    loop do
       puts "Please, master of EIIS, order your command:"
-      cmd = gets.chomp
-      case cmd
+      # cmd = gets.chomp
+      cmd = @tty_reader.read_line("=> ")
+      case cmd.strip
       when "commands"
         cmds = %q[
         exit - Quit EIIS server
@@ -289,15 +335,12 @@ class EIIS
         if response != nil
           pp response
           puts "Set Ok package data for #{@package_ids.values[$1.to_i]}"
-          set_ok($1)
+          puts set_ok($1)
         end
       when /^package_all (\d+)$/
         puts "All package data for #{@package_ids.values[$1.to_i]}"
         response = get_package_all($1)
-        if response != nil
-          parse_xml_data_and_write_to_file(response)
-          puts "File saved!"
-        end
+        puts "File saved!"
       when /^obj_meta (\d+)$/
         response = get_object_meta($1)
         if response != nil

@@ -1,8 +1,129 @@
 require 'nokogiri'
 require 'pp'
 require 'date'
+require 'sequel'
+require 'tiny_tds'
 
 class ParseEIIS
+
+    def initialize
+        @db_connection_params = {
+            :host => '10.0.18.3',
+            :database => 'esrp_prod',
+            :user => 'ra',
+            :password => '',
+            :timeout => 300
+        }
+    end
+
+    # parse and insert EIIS.FOUNDER_TYPES
+    def InsertFounderTypes(xml)
+        import_data = ParseSimple(xml)
+        db = Sequel.tinytds(@db_connection_params)
+        import_data.each_slice(900) do |slice|
+            db[:SchoolFounderTypes].import([:ID,
+            :NAME,
+            :CODE,
+            :NOT_TRUE], slice)
+        end
+        db.disconnect
+    end
+
+    # simple parsing
+    def ParseSimple(xml)
+        doc = Nokogiri::Slop(xml)
+
+        result = []
+        doc.object.row.each do |row|
+            result << row.children.text.strip.split("\n")
+        end
+        result.map! do |x|
+            x.map! do |y|
+                if y == "False" then
+                    0
+                elsif y == "True" then
+                    1
+                elsif y == "NULL" then
+                    nil                
+                else
+                    y
+                end
+            end
+        end
+        return result
+    end
+
+    # parse and insert
+    def InsertFounders(xml)
+        import_data = ParseSimple(xml)
+        db = Sequel.tinytds(@db_connection_params)
+        import_data.each_slice(900) do |slice|
+            db[:SchoolFounders].import([:ID,
+            :TYPE_FK,
+            :ORGANIZATION_FULLNAME,
+            :ORGANIZATION_SHORTNAME,
+            :LASTNAME,
+            :FIRSTNAME,
+            :PATRONYMIC,
+            :PHONES,
+            :FAXES,
+            :EMAILS,
+            :OGRN,
+            :INN,
+            :KPP,
+            :L_ADDRESS,
+            :L_ADDRESS_COUNTRY_FK,
+            :L_ADDRESS_REGION_FK,
+            :L_ADDRESS_DISTRICT,
+            :L_ADDRESS_TOWN,
+            :L_ADDRESS_STREET,
+            :L_ADDRESS_HOUSE_NUMBER,
+            :L_ADDRESS_POSTAL_CODE,
+            :P_ADDRESS,
+            :P_ADDRESS_COUNTRY_FK,
+            :P_ADDRESS_REGION_FK,
+            :P_ADDRESS_DISTRICT,
+            :P_ADDRESS_TOWN,
+            :P_ADDRESS_STREET,
+            :P_ADDRESS_HOUSE_NUMBER,
+            :P_ADDRESS_POSTAL_CODE], slice)
+        end
+        db.disconnect
+    end
+
+    # EIIS.LICENSED_PROGRAMS
+    def ParseLicensedPrograms(xml)
+        doc = Nokogiri::Slop(xml)
+        sqltext = ""
+        doc.object.row.each do |x| 
+            sqltext += %Q[insert into dbo.LicensedPrograms
+                values(
+                '#{x.primary.content.upcase}', 
+                '#{x.reference("[@code='REGION_LOCATION']").content.upcase}',
+                '#{x.reference("[@code='LICENSE_APPFK']").content.upcase}',
+                '#{x.reference("[@code='EDUPROGRAMFK']").content.upcase}',
+                '#{x.column("[@code='CODE']").content}',
+                '#{x.column("[@code='NAME']").content}',
+                '#{x.reference("[@code='EDULEVELFK']").content.upcase}',
+                '#{x.reference("[@code='EDUPROGRAM_TYPEFK']").content.upcase}',
+                '#{x.column("[@code='PERIOD']").content}',
+                '#{x.column("[@code='QUALIFICATIONCODE']").content}',
+                '#{x.column("[@code='QUALIFICATIONNAME']").content}',
+                '#{x.column("[@code='QUALIFICATIONGRADE']").content}',
+                '#{x.reference("[@code='LICENSE_STATFK']").content.upcase}',
+                '#{x.column("[@code='OKSO']").content}',
+                '#{x.column("[@code='STANDARD_TYPE']").content}',
+                #{x.column("[@code='SYS_STATE']").content.to_i},
+                '#{if x.column("[@code='SYS_CREATED']").content == "NULL" then 'NULL' else Date.parse(x.column("[@code='SYS_CREATED']").content).to_s end}',
+                '#{if x.column("[@code='SYS_UPDATED']").content == "NULL" then 'NULL' else Date.parse(x.column("[@code='SYS_UPDATED']").content) end}',
+                '#{x.column("[@code='NEW_EDUPROGRAMFK']").content}'
+                ); 
+            ]
+            sqltext += "\n"
+        end
+        sqltext = sqltext.gsub("'NULL'","NULL")
+        return sqltext
+    end
 
     # EIIS.SCHOOLS -> dbo.Schools
     def ParseSchools(xml)
