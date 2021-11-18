@@ -14,17 +14,19 @@ class ParseEIIS
             :password => '',
             :timeout => 300
         }
+        # @db_connection_params = {
+        #     :dataserver => 'FBS-SQL\R2',
+        #     :user => 'esrp_prod',
+        #     :timeout => 300
+        # }        
     end
 
-    # parse and insert EIIS.FOUNDER_TYPES
-    def InsertFounderTypes(xml)
-        import_data = ParseSimple(xml)
+    def InsertParsedTable(xml, table_name)
+        columns, import_data = ParseSimple(xml)
         db = Sequel.tinytds(@db_connection_params)
+		target = db.from{eiis[table_name.to_sym]}
         import_data.each_slice(900) do |slice|
-            db[:SchoolFounderTypes].import([:ID,
-            :NAME,
-            :CODE,
-            :NOT_TRUE], slice)
+            target.import(columns, slice)
         end
         db.disconnect
     end
@@ -32,10 +34,20 @@ class ParseEIIS
     # simple parsing
     def ParseSimple(xml)
         doc = Nokogiri::Slop(xml)
-
+    
+        # это данные
         result = []
+        # это столбцы
+        codes = []
         doc.object.row.each do |row|
-            result << row.children.text.strip.split("\n")
+            # заполняем данные в массив
+            result << row.elements.children.map {|x| x.content.delete("\n")}
+            # если столбцы не заполнены, заполняем один раз, этого достаточно т.к. все столбцы одинаковы для всех строк
+            if codes.empty?
+                row.elements.each do |element|
+                    codes << element.attributes.select {|x| x == "code"}.values[0].value.intern
+                end
+            end
         end
         result.map! do |x|
             x.map! do |y|
@@ -44,21 +56,72 @@ class ParseEIIS
                 elsif y == "True" then
                     1
                 elsif y == "NULL" then
-                    nil                
+                    nil
                 else
                     y
                 end
             end
         end
-        return result
-    end
+        [codes, result]
+    end 
 
+    # parse and insert EIIS.FOUNDER_TYPES
+    def InsertFounderTypes(xml)
+        import_data = ParseSimple(xml)
+        db = Sequel.tinytds(@db_connection_params)
+        import_data.each_slice(900) do |slice|
+            db[:FOUNDER_TYPES].import([:ID,
+            :NAME,
+            :CODE,
+            :NOT_TRUE], slice)
+        end
+        db.disconnect
+    end
+    
     # parse and insert
     def InsertFounders(xml)
         import_data = ParseSimple(xml)
         db = Sequel.tinytds(@db_connection_params)
         import_data.each_slice(900) do |slice|
             db[:SchoolFounders].import([:ID,
+            :TYPE_FK,
+            :ORGANIZATION_FULLNAME,
+            :ORGANIZATION_SHORTNAME,
+            :LASTNAME,
+            :FIRSTNAME,
+            :PATRONYMIC,
+            :PHONES,
+            :FAXES,
+            :EMAILS,
+            :OGRN,
+            :INN,
+            :KPP,
+            :L_ADDRESS,
+            :L_ADDRESS_COUNTRY_FK,
+            :L_ADDRESS_REGION_FK,
+            :L_ADDRESS_DISTRICT,
+            :L_ADDRESS_TOWN,
+            :L_ADDRESS_STREET,
+            :L_ADDRESS_HOUSE_NUMBER,
+            :L_ADDRESS_POSTAL_CODE,
+            :P_ADDRESS,
+            :P_ADDRESS_COUNTRY_FK,
+            :P_ADDRESS_REGION_FK,
+            :P_ADDRESS_DISTRICT,
+            :P_ADDRESS_TOWN,
+            :P_ADDRESS_STREET,
+            :P_ADDRESS_HOUSE_NUMBER,
+            :P_ADDRESS_POSTAL_CODE], slice)
+        end
+        db.disconnect
+    end
+
+    # parse and insert
+    def InsertSchools(xml)
+        import_data = ParseSimple(xml)
+        db = Sequel.tinytds(@db_connection_params)
+        import_data.each_slice(900) do |slice|
+            db[:Schools].import([:ID,
             :TYPE_FK,
             :ORGANIZATION_FULLNAME,
             :ORGANIZATION_SHORTNAME,

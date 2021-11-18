@@ -3,8 +3,10 @@ require 'json'
 require 'nokogiri'
 require 'active_support/core_ext/hash'
 require_relative 'ParseEIIS.rb'
+require_relative 'ParseObjectsDescriptions.rb'
 require 'benchmark'
 require 'tty-reader'
+require 'logger'
 
 class EIIS
   attr_accessor :session_id
@@ -12,7 +14,7 @@ class EIIS
 
   def initialize
     @eiis_wsdl = "http://eiis-production.srvdev.ru/integrationservice/baseservice.asmx?WSDL"
-    # @eiis_wsdl = "https://eiis.obrnadzor.gov.ru/IntegrationService/BaseService.asmx?WSDL"
+    # @eiis_wsdl = "http://eiis.obrnadzor.gov.ru/IntegrationServices/baseservice.asmx?WSDL"
     @primary_key_code = 'ID'
     @session_id = ""
     @client = Savon.client(
@@ -28,6 +30,7 @@ class EIIS
     @object_codes = []
     @package_ids = {}
     @parseEIIS = ParseEIIS.new
+    @parseobjects = ParseObjectsDescriptions.new
     @tty_reader = TTY::Reader.new(track_history: true, history_cycle: true)
     puts("Creating SOAP client for: " + @eiis_wsdl)
   end
@@ -58,6 +61,7 @@ class EIIS
 
   def parse_object_codes(objects)
     doc = Nokogiri::XML(objects)
+    @object_codes.clear
     doc.xpath('//list/object/@code').each do |o|
       @object_codes << o.value
     end
@@ -141,6 +145,7 @@ class EIIS
     begin
       msg = { session_id: @session_id, package_id: @package_ids.keys[package_index.to_i] }
       response = @client.call(:get_package_meta, message: msg)
+      # pp response
       return response.body.values[0][:get_package_meta_result]
     rescue Savon::HTTPError => error
       Logger.log error.http.code
@@ -165,12 +170,45 @@ class EIIS
     end
   end
 
-  def get_package_all(package_index)
+  def save_package_all(package_index)
     if @package_ids.empty?
       puts "No ids available, please create packages by 'create [Number]' command!"
       return nil
     end
     response = get_package_meta($1)
+	capacity = 0
+    if response != nil
+      doc = Nokogiri::XML(response)
+      capacity = doc.at('package')['capacity']
+    end
+    all_data = ""
+    table = @package_ids.values[package_index.to_i].split(".")
+    if table.length > 2
+      table_name = table.drop(1).take(2).join("_")
+    else
+      table_name = table.last
+    end
+	puts "Processing table: #{table_name} with capacity of #{capacity} parts..."
+    Benchmark.bm do |x|
+        (1..capacity.to_i).each do |n|
+			data_time = x.report("get data chunk") {
+              all_data = get_package_data(package_index, n)
+			}
+			parse_insert_time = x.report("parse insert chunk") {
+              @parseEIIS.InsertParsedTable(all_data, table_name)
+			}
+			puts "part #{n} success"
+      end
+    end
+    set_ok(package_index)
+  end
+
+  def get_package_all(package_index)
+    if @package_ids.empty?
+      puts "No ids available, please create packages by 'create [Number]' command!"
+      return nil
+    end
+    response = get_package_meta(package_index)
     if response != nil
       doc = Nokogiri::XML(response)
       pp doc
@@ -188,7 +226,6 @@ class EIIS
     #   end
     # end
     File.delete("inserts.sql") if File.exists?("inserts.sql") 
-    threads = []
     Benchmark.bm do |x|
       x.report do
         (1..capacity.to_i).each do |n|
@@ -309,6 +346,18 @@ class EIIS
           # content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
           parse_object_codes(objects)
         end
+      when "create_all"
+        objects = get_objects(true)
+        if objects != nil
+          creates, descriptions = @parseobjects.ParseObjectsList(objects)
+          creates.encode!("Windows-1251", invalid: :replace, undef: :replace)
+          descriptions.encode!("Windows-1251", invalid: :replace, undef: :replace)
+          File.open('creates.sql', 'w:windows-1251') {|f| f.write(creates) }
+          puts "Creates saved!"
+          File.open('descriptions.sql', 'w:windows-1251') {|f| f.write(descriptions) }
+          puts "Descriptions saved!"
+          parse_object_codes(objects)
+        end
       when "print_codes"
         @object_codes.each_with_index do |code, index|
           puts "#{index}: #{code}"
@@ -336,11 +385,17 @@ class EIIS
           pp response
           puts "Set Ok package data for #{@package_ids.values[$1.to_i]}"
           puts set_ok($1)
+          File.open('debug_data.txt', 'w:windows-1251') {|f| f.write(response) }
+          puts "Data saved!"
         end
-      when /^package_all (\d+)$/
-        puts "All package data for #{@package_ids.values[$1.to_i]}"
-        response = get_package_all($1)
-        puts "File saved!"
+      # when /^package_all (\d+)$/
+      #   puts "All package data for #{@package_ids.values[$1.to_i]}"
+      #   response = get_package_all($1)
+      #   puts "File saved!"
+      when /^save_all (\d+)$/
+        puts "Save to database all package data for #{@package_ids.values[$1.to_i]}"
+        save_package_all($1)
+		puts "All right saved to database!"
       when /^obj_meta (\d+)$/
         response = get_object_meta($1)
         if response != nil
