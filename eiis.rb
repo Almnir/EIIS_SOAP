@@ -7,15 +7,20 @@ require_relative 'ParseObjectsDescriptions.rb'
 require 'benchmark'
 require 'tty-reader'
 require 'logger'
+require 'tty-progressbar'
+require 'tty-cursor'
+require 'colorize'
+require_relative 'credentials.rb'
 
 class EIIS
+  include Credentials
   attr_accessor :session_id
   attr_accessor :object_codes
 
   def initialize
-    @eiis_wsdl = "http://eiis-production.srvdev.ru/integrationservice/baseservice.asmx?WSDL"
+    @eiis_wsdl = Credentials::EIIS_WSDL
+    # @eiis_wsdl = "http://eiis-production.srvdev.ru/integrationservice/baseservice.asmx?WSDL"
     # @eiis_wsdl = "http://eiis.obrnadzor.gov.ru/IntegrationServices/baseservice.asmx?WSDL"
-    @primary_key_code = 'ID'
     @session_id = ""
     @client = Savon.client(
       :wsdl => @eiis_wsdl,
@@ -32,12 +37,19 @@ class EIIS
     @parseEIIS = ParseEIIS.new
     @parseobjects = ParseObjectsDescriptions.new
     @tty_reader = TTY::Reader.new(track_history: true, history_cycle: true)
+    @tty_cursor = TTY::Cursor
     puts("Creating SOAP client for: " + @eiis_wsdl)
   end
 
   def authorize(login, password)
     begin
       response = @client.call(:get_session_id, message: { login: login, password: password })
+      response_id = response.body.values[0][:get_session_id_result]
+      puts "==================reponse: #{response_id}"
+      if response_id == "0321"
+        puts "Неправильный логин или пароль!"
+        return nil
+      end
       doc = Nokogiri::XML(response.body.values[0][:get_session_id_result])
       @session_id = doc.at('session')['id']
       return response
@@ -77,6 +89,15 @@ class EIIS
     begin
       msg = { session_id: @session_id, object_code: @object_codes[object_code.to_i] }
       response = @client.call(:get_object_meta, message: msg)
+      File.open('response.txt', 'w') {|f| f.write(response) }
+      textvalue = response.xpath('//tns:GetObjectMetaResult').first.inner_text
+      if textvalue.include?("не задана")
+        puts "Ошибка!"
+        puts "*"*100
+        puts(textvalue)
+        puts "*"*100
+          return nil
+      end
       return response.body.values[0][:get_object_meta_result]
     rescue Savon::HTTPError => error
       Logger.log error.http.code
@@ -86,14 +107,14 @@ class EIIS
 
   ### получение метаданных документа
   ### не работает по непонятной причине, возвращает код 033
-  def get_document_meta(object_code)
+  def get_document_meta(object_code, primary_key)
     if @object_codes.empty?
       puts "No codes available, please get objects by 'objects' command!"
       return nil
     end
     puts "Code value #{@object_codes[object_code.to_i]}"
     begin
-      msg = { session_id: @session_id, object_code: @object_codes[object_code.to_i], primary_key: @primary_key_code }
+      msg = { session_id: @session_id, object_code: @object_codes[object_code.to_i], primary_key: primary_key }
       pp msg
       response = @client.call(:get_document_meta, message: msg)
       pp response
@@ -116,7 +137,7 @@ class EIIS
 
   ### создание пакета по индексу объекта
   ### остальные параметры интересны, но непонятно что делают
-  def create_package(object_code, history_create=false, document_include=true, filter="")
+  def create_package(object_code, history_create=nil, document_include=nil, filter=nil)
     if @object_codes.empty?
       puts "No codes available, please get objects by 'objects' command!"
       return nil
@@ -124,11 +145,23 @@ class EIIS
     puts "Code value #{@object_codes[object_code.to_i]}"
     begin
       msg = { session_id: @session_id, object_code: @object_codes[object_code.to_i], history_create: history_create, document_include: document_include, filter: filter}
-      # puts(msg)
+      puts(msg)
       response = @client.call(:create_package, message: msg)
+      # puts "-"*100
       # puts(response)
-      doc = Nokogiri::XML(response.body.values[0][:create_package_result])
-      package_id = doc.at('package')['id']
+      # File.open('response.txt', 'w') {|f| f.write(response) }
+      # puts "-"*100
+      textvalue = response.xpath('//tns:CreatePackageResult').first.inner_text
+      if textvalue.include?("Невозможно") or textvalue == "0540"
+        puts "Ошибка!"
+        puts "*"*100
+        puts(textvalue)
+        puts "*"*100
+        return nil
+      end
+      doc = Nokogiri::XML(textvalue)
+      package_id = doc.xpath('//@id').text
+      pp package_id
       return package_id
     rescue Savon::HTTPError => error
       Logger.log error.http.code
@@ -175,8 +208,17 @@ class EIIS
       puts "No ids available, please create packages by 'create [Number]' command!"
       return nil
     end
-    response = get_package_meta($1)
-	capacity = 0
+    retries_count = 0
+    response = ""
+    loop do 
+      response = get_package_meta(package_index)
+      break if ((response != nil) && (response != "053"))
+      retries_count += 1
+      print @tty_cursor.save
+      print "retries: #{retries_count}"
+      print @tty_cursor.restore
+    end
+	  capacity = 0
     if response != nil
       doc = Nokogiri::XML(response)
       capacity = doc.at('package')['capacity']
@@ -188,15 +230,15 @@ class EIIS
     else
       table_name = table.last
     end
-	puts "Processing table: #{table_name} with capacity of #{capacity} parts..."
+	  puts "Processing table: #{table_name} with capacity of #{capacity} parts..."
     Benchmark.bm do |x|
-        (1..capacity.to_i).each do |n|
-			data_time = x.report("get data chunk") {
-              all_data = get_package_data(package_index, n)
-			}
-			parse_insert_time = x.report("parse insert chunk") {
-              @parseEIIS.InsertParsedTable(all_data, table_name)
-			}
+      (1..capacity.to_i).each do |n|
+        data_time = x.report("get data chunk") {
+          all_data = get_package_data(package_index, n)
+        }
+        parse_insert_time = x.report("parse insert chunk") {
+          @parseEIIS.InsertParsedTable(all_data, table_name)
+        }
 			puts "part #{n} success"
       end
     end
@@ -289,16 +331,18 @@ class EIIS
   end
 
   def serve
-    print "login:"
-    login = gets.chomp
-    print "password:"
-    password = gets.chomp
-    auth = authorize(login, password)
+    # print "login:"
+    # login = gets.chomp
+    # print "password:"
+    # password = gets.chomp
+    # auth = authorize(login, password)
+    auth = authorize("fisege", "123")
     if auth != nil
       puts("Session ID set to #{@session_id}")
       objects = get_objects(true)
       if objects != nil
         pp objects
+        puts "-----------------------------------#{objects}"
         # content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
         parse_object_codes(objects)
         @object_codes.each_with_index do |code, index|
@@ -334,20 +378,21 @@ class EIIS
         print_packages - Print indexed list of packages (you need to know package index)
         package_meta N - Get package metadata from package, with N as package index
         package_data N P - Get package data from package, with N as package index and P as part index (starts with 1 I guess)
-        package_all N - Get all package data from package, with N as package index, writes to 'inserts.sql' file
+        save_package N - Get all package data from package, with N as package index, writes to 'inserts.sql' file
+        save_all_from N - Get all package data from all packages since N, writes to database
         ]
         puts "#{cmds}"
       when "operations"
         puts(@client.operations)
       when "objects"
-        objects = get_objects(true)
+        objects = get_objects(false)
         if objects != nil
           pp objects
           # content = Hash.from_xml(Nokogiri::XML(objects).to_xml).to_json
           parse_object_codes(objects)
         end
       when "create_all"
-        objects = get_objects(true)
+        objects = get_objects(false)
         if objects != nil
           creates, descriptions = @parseobjects.ParseObjectsList(objects)
           creates.encode!("Windows-1251", invalid: :replace, undef: :replace)
@@ -373,36 +418,60 @@ class EIIS
           store_package_id(response, $1)
         end
       when /^package_meta (\d+)$/
-        puts "Package metadata for #{@package_ids.values[$1.to_i]}"    
-        response = get_package_meta($1)
-        if response != nil
-          pp response
+        puts "Package metadata for #{@package_ids.values[$1.to_i]}"
+        retries_count = 0
+        loop do 
+          response = get_package_meta($1)
+          break if ((response != nil) && (response != "053"))
+          retries_count += 1
+          print @tty_cursor.save
+          print "retries: #{retries_count}"
+          print @tty_cursor.restore
         end
+        pp response
       when /^package_data (\d+) (\d+)$/
         puts "Package part data for #{@package_ids.values[$1.to_i]} part : #{$2.to_i}"
         response = get_package_data($1, $2)
         if response != nil
-          pp response
+          # pp response
           puts "Set Ok package data for #{@package_ids.values[$1.to_i]}"
           puts set_ok($1)
-          File.open('debug_data.txt', 'w:windows-1251') {|f| f.write(response) }
+          File.open('debug_data.txt', 'w') {|f| f.write(response) }
           puts "Data saved!"
         end
       # when /^package_all (\d+)$/
       #   puts "All package data for #{@package_ids.values[$1.to_i]}"
       #   response = get_package_all($1)
       #   puts "File saved!"
-      when /^save_all (\d+)$/
+      when /^save_package (\d+)$/
         puts "Save to database all package data for #{@package_ids.values[$1.to_i]}"
         save_package_all($1)
-		puts "All right saved to database!"
+        puts "All right saved to database!"
+      when /^save_all_from (\d+)$/
+        puts "Save to database all packages from #{$1}"
+        for package in (0..28) do
+          response = create_package(package)
+          if response != nil
+            pp "Package created with Package_id = #{response}"
+            store_package_id(response, package)
+          end
+        end
+        puts "All packages created!"
+        start_package = $1
+        for package in (start_package.to_i..28) do
+          puts "Save to database all package data for #{@package_ids.values[package]}"
+          save_package_all(package)
+          puts "Package #{@package_ids.values[package]} saved!"
+        end
+        puts "All packages saved to database!".colorize(:color => :white, :background => :red)
       when /^obj_meta (\d+)$/
         response = get_object_meta($1)
         if response != nil
           pp response
         end
-      when /^doc_meta (\d+)$/
-        response = get_document_meta($1)
+      when /^doc_meta (\d+) (\w+)$/
+        response = get_document_meta($1, $2)
+        puts "Document meta for #{@package_ids.values[$1.to_i]} and primary key #{$2}"
         if response != nil
           pp response
         end

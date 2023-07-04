@@ -1,19 +1,26 @@
+require "java"
 require 'nokogiri'
 require 'pp'
 require 'date'
 require 'sequel'
-require 'tiny_tds'
+# require 'tiny_tds'
+require 'd:/rubies/sqljdbc42.jar'
+require_relative 'credentials.rb'
+# require 'd:/rubies/mssql-jdbc-11.2.0.jre18.jar'
+
+Java::com.microsoft.sqlserver.jdbc.SQLServerDriver
 
 class ParseEIIS
-
+    include Credentials
     def initialize
-        @db_connection_params = {
-            :host => '10.0.18.3',
-            :database => 'esrp_prod',
-            :user => 'ra',
-            :password => '',
-            :timeout => 300
-        }
+        @db_connection_params = Credentials::DB_CONNECTION_PARAMS
+        # @db_connection_params = {
+        #     :host => '10.0.18.3',
+        #     :database => 'esrp_prod',
+        #     :user => 'ra',
+        #     :password => 'Njkmrjcdjb',
+        #     :timeout => 300
+        # }
         # @db_connection_params = {
         #     :dataserver => 'FBS-SQL\R2',
         #     :user => 'esrp_prod',
@@ -23,7 +30,8 @@ class ParseEIIS
 
     def InsertParsedTable(xml, table_name)
         columns, import_data = ParseSimple(xml)
-        db = Sequel.tinytds(@db_connection_params)
+        db = Sequel.connect(@db_connection_params)
+        # db = Sequel.tinytds(@db_connection_params)
 		target = db.from{eiis[table_name.to_sym]}
         import_data.each_slice(900) do |slice|
             target.import(columns, slice)
